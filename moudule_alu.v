@@ -5,7 +5,6 @@ module module_alu (
     input wire [15:0] valor2,
     input wire [5:0] imm,
     input wire imms,
-    input wire [3:0] dest,
     
 	 output reg [15:0] result
 );
@@ -14,7 +13,7 @@ module module_alu (
 	 wire [15:0] imm_sinal = imms ? (-imms_abs) : imm_abs;
 	 
 	 integer i;
-	 reg [15:0] mul;
+	 reg [15:0] mul_acc;
     
     // Estados
     localparam [2:0]      S_LOAD = 3'd0,
@@ -23,8 +22,7 @@ module module_alu (
                           S_SUB  = 3'd3,
                           S_SUBI = 3'd4,
                           S_MUL  = 3'd5,
-                          S_CLR  = 3'd6,
-                          S_DPL  = 3'd7;
+                          S_CLR  = 3'd6;
                            
     
     always @(posedge clk) begin
