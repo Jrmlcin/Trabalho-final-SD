@@ -67,6 +67,10 @@ module module_alu (
 					resultado <= 16'd0;
 				end
 				
+				S_DPL: begin
+				 resultado <= valor1;
+				end
+				
 				default: begin
 					resultado <= 16'd0;
 				end

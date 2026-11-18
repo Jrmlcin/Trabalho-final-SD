@@ -1,98 +1,194 @@
 module module_mini_cpu (
-    input  wire        clk,
-    input  wire        on_off,
-    input  wire        enviar,
-    input  wire [17:0] data,
-    output wire [7:0]  lcd_data,
-    output wire        lcd_rs, 
-    output wire        lcd_rw,
-    output wire        lcd_en
-);    
-    wire [15:0] alu_result;
-    wire [15:0] mem_q;          // Substitui mem_data_out1 e mem_data_out2
-    reg  [15:0] reg_val1;       // Adicionado para salvar o 1º operando
-    
-    reg         mem_we;
-    reg  [3:0]  mem_wa;
-    reg  [15:0] mem_wd;
-    reg  [3:0]  mem_addr_mux;   // Adicionado (estava sem declaração)
+input wire clk,
+input wire on_off,
+input wire enviar,
+input wire [17:0] data,
+output wire [7:0] lcd_data,
+output wire lcd_rs,
+output wire lcd_rw,
+output wire lcd_en
+);
+wire [15:0] alu_result;
+wire [15:0] mem_q;
+reg [15:0] reg_val1;
 
-    module_alu ula_inst (
-        .clk       (clk),
-        .opcode    (data[17:15]), 
-        .valor1    (reg_val1),      // Ajustado para reg_val1
-        .valor2    (mem_q),         // Ajustado para mem_q
-        .imm       (data[5:0]),
-        .imms      (data[6]),       // Movido de mem_inst para ula_inst
-        .resultado (alu_result)     // Use .result se a porta em module_alu se chamar result
-    );
+reg         mem_we;
+reg         mem_clear;      // Declarado
+reg  [3:0]  mem_wa;
+reg  [15:0] mem_wd;
+reg  [3:0]  mem_addr_mux;
 
-    memory mem_inst (
-        .clk  (clk),
-        .we   (mem_we), 
-        .addr (mem_addr_mux),       // Porta única multiplexada
-        .data (mem_wd),             // Porta única de escrita
-        .q    (mem_q)               // Porta única de leitura
-    );
-   
-    localparam WAIT_BUTTON = 3'd0,
-               FETCH       = 3'd1,
-               DECODE      = 3'd2,
-               EXECUTE     = 3'd3,
-               WRITE_BACK  = 3'd4,
-               LCD_UPDATE  = 3'd5;
-               
-    reg [2:0] estado_atual = WAIT_BUTTON;
-    reg       enviar_prev;
+reg  [2:0]  opcode;
+reg  [3:0]  dest;
+reg  [3:0]  src1;
+reg  [3:0]  src2;
+reg  [5:0]  imm;
+reg         imms;
 
-    always @(*) begin
-        if (mem_we)
-            mem_addr_mux = mem_wa;     // Endereço de escrita (no LCD_UPDATE)
-        else if (estado_atual == FETCH)
-            mem_addr_mux = data[10:7]; // Endereço do 1º operando (valor1)
-        else
-            mem_addr_mux = data[6:3];  // Endereço do 2º operando (valor2)
-    end
-     
-    always @(posedge clk) begin
-        enviar_prev <= enviar;
-        
+// Decodificador combinacional
+always @(*) begin
+    opcode = data[17:15];
+    dest   = 4'd0;
+    src1   = 4'd0;
+    src2   = 4'd0;
+    imm    = data[5:0];
+    imms   = data[6];
+
+    case (opcode)
+        // Tipo 3: LOAD
+        3'b000: begin
+            dest = data[14:11];
+            imms = data[6];
+            imm  = data[5:0];
+        end
+        // Tipo 1: ADD / SUB
+        3'b001, 3'b011: begin
+            dest = data[14:11];
+            src1 = data[10:7];
+            src2 = data[6:3];
+        end
+        // Tipo 2: ADDI / SUBI / MUL
+        3'b010, 3'b100, 3'b101: begin
+            dest = data[14:11];
+            src1 = data[10:7];
+            imms = data[6];
+            imm  = data[5:0];
+        end
+        // Tipo 4: CLEAR / DISPLAY
+        3'b110, 3'b111: begin
+            dest = data[14:11];
+            src1 = data[14:11];
+        end
+    endcase
+end
+
+module_alu ula_inst (
+    .clk       (clk),
+    .opcode    (opcode),
+    .valor1    (reg_val1),
+    .valor2    (mem_q),
+    .imm       (imm),
+    .imms      (imms),
+    .resultado (alu_result)
+);
+
+memory mem_inst (
+    .clk   (clk),
+    .we    (mem_we),
+    .clear (mem_clear),     // Conectado
+    .addr  (mem_addr_mux),
+    .data  (mem_wd),
+    .q     (mem_q)
+);
+
+localparam WAIT_BUTTON = 3'd0,
+           FETCH       = 3'd1,
+           DECODE      = 3'd2,
+           EXECUTE     = 3'd3,
+           WRITE_BACK  = 3'd4,
+           LCD_UPDATE  = 3'd5;
+
+reg [2:0]  estado_atual = WAIT_BUTTON;
+reg        enviar_prev;
+reg        on_off_prev;
+
+// Sinais de controle do LCD
+reg        sistema_on   = 1'b0;
+reg        tela_inicial = 1'b1;
+reg        lcd_atualizar;
+reg [2:0]  lcd_opcode_reg;
+reg [3:0]  lcd_dest_reg;
+reg [15:0] lcd_valor_reg;
+
+wire on_off_solto = (on_off_prev == 1'b0 && on_off == 1'b1);
+wire enviar_solto = (enviar_prev == 1'b0 && enviar == 1'b1);
+
+// Instância do controlador do LCD usando os valores salvos
+lcd lcd_inst (
+    .clk          (clk),
+    .sistema_on   (sistema_on),
+    .atualizar    (lcd_atualizar),
+    .tela_inicial (tela_inicial),
+    .opcode       (lcd_opcode_reg),
+    .reg_dest     (lcd_dest_reg),
+    .valor_16b    (lcd_valor_reg),
+    .lcd_data     (lcd_data),
+    .lcd_rs       (lcd_rs),
+    .lcd_rw       (lcd_rw),
+    .lcd_en       (lcd_en)
+);
+
+always @(*) begin
+    if (mem_we)
+        mem_addr_mux = mem_wa;
+    else if (estado_atual == FETCH)
+        mem_addr_mux = src1;
+    else
+        mem_addr_mux = src2;
+end
+
+// Único bloco sequencial da CPU
+always @(posedge clk) begin
+    enviar_prev   <= enviar;
+    on_off_prev   <= on_off;
+    lcd_atualizar <= 1'b0;
+    mem_clear     <= 1'b0;
+
+    if (on_off_solto) begin
+        sistema_on   <= ~sistema_on;
+        tela_inicial <= 1'b1;
+        mem_clear    <= 1'b1; // Zera toda a memória ao ligar/desligar
+        mem_we       <= 1'b0;
+        estado_atual <= WAIT_BUTTON;
+    end else if (!sistema_on) begin
+        mem_we       <= 1'b0;
+        estado_atual <= WAIT_BUTTON;
+    end else begin
         case (estado_atual)
             WAIT_BUTTON: begin
-                mem_we <= 1'b0; 
-                if (enviar_prev == 1'b1 && enviar == 1'b0) begin
+                mem_we <= 1'b0;
+                if (enviar_solto) begin
                     estado_atual <= FETCH;
                 end
             end
-            
+
             FETCH: begin
                 estado_atual <= DECODE;
             end
-            
+
             DECODE: begin
-                reg_val1     <= mem_q; // Salva o 1º operando lido da memória
+                reg_val1     <= mem_q;
                 estado_atual <= EXECUTE;
             end
-            
+
             EXECUTE: begin
                 estado_atual <= WRITE_BACK;
             end
-            
+
             WRITE_BACK: begin
-                if (data[17:15] != 3'd6 && data[17:15] != 3'd7) begin
-                    mem_wa <= data[14:11]; // Corrigido de memory_wa para mem_wa
-                    mem_wd <= alu_result;  // Corrigido de memory_wd para mem_wd
-                    mem_we <= 1'b1;        // Corrigido de memory_we para mem_we
+                if (opcode == 3'b110) begin //se CLEAR, limpa tudo
+                    mem_clear <= 1'b1;
+                end else if (opcode != 3'b111) begin
+                    // Grava alu_result em dest (inclui CLEAR zerando o registrador dest específico)
+                    mem_wa <= dest;
+                    mem_wd <= alu_result;
+                    mem_we <= 1'b1;
                 end
                 estado_atual <= LCD_UPDATE;
             end
-            
+
             LCD_UPDATE: begin
-                mem_we       <= 1'b0;
-                estado_atual <= WAIT_BUTTON; 
+                mem_we         <= 1'b0;
+                tela_inicial   <= 1'b0;
+                lcd_opcode_reg <= opcode;
+                lcd_dest_reg   <= dest;
+                lcd_valor_reg  <= (opcode == 3'b111) ? reg_val1 : alu_result;
+                lcd_atualizar  <= 1'b1; // Dispara a escrita no LCD
+                estado_atual   <= WAIT_BUTTON;
             end
 
             default: estado_atual <= WAIT_BUTTON;
         endcase
     end
+end
 endmodule
