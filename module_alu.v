@@ -3,15 +3,17 @@ module module_alu (
     input wire clk,
     input wire [15:0] valor1,
     input wire [15:0] valor2,
-    input wire [5:0] imm,
-    input wire imms,
+    input wire [5:0] imm,	//imediato
+    input wire imms,       //sinal do imediato
     
 	 output reg [15:0] resultado
 );
 
+  // Concatenação para 16 bits do imediato e utilização do bit de sinal
     wire [15:0] imm_abs   = {10'd0, imm};
 	 wire [15:0] imm_sinal = imms ? (-imm_abs) : imm_abs;
 	 
+	 //variáveis temporárias para utilizar na multiplicação
 	 integer i;
 	 reg [15:0] mul_acc;
     
@@ -22,7 +24,8 @@ module module_alu (
                           S_SUB  = 3'd3,
                           S_SUBI = 3'd4,
                           S_MUL  = 3'd5,
-                          S_CLR  = 3'd6;
+                          S_CLR  = 3'd6,
+								  S_DPL  = 3'd7;
                            
     
     always @(posedge clk) begin
@@ -49,13 +52,14 @@ module module_alu (
             end
             
             S_MUL: begin
-					mul_acc = 16'd0;
+					mul_acc = 16'd0; //zerar os bits
                 
-                for(i = 0; i < 64; i = i +1)begin
-                    if(i < imm)
+                for(i = 0; i < 64; i = i + 1)begin
+                    if(i < imm) // condição para o for não somar mais do que o valor no imediato
 						  mul_acc = mul_acc + valor1;
                 end
 					 
+					 // passar o valor positivo ou negativo dependendo do sinal do imediato
 					 if (imms == 1'b1)begin
 						resultado <= -mul_acc;
 					 end
@@ -65,6 +69,10 @@ module module_alu (
 				
 				S_CLR: begin
 					resultado <= 16'd0;
+				end
+				
+				S_DPL: begin
+					resultado <= valor1;
 				end
 				
 				default: begin
