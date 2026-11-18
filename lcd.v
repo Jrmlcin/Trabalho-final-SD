@@ -26,12 +26,13 @@ module lcd (
     localparam ST_IDLE      = 3'd0,
                ST_INIT      = 3'd1,
                ST_WRITE_ALL = 3'd2,
-               ST_OFF       = 3'd3;
+               ST_OFF       = 3'd3,
+					ST_PWR_WAIT	 = 3'd4;
 
     reg [2:0]  estado = ST_OFF;
-    reg [5:0]  passo;
-    reg [16:0] cnt_tempo; // Conta até 100.000 ciclos (2 ms em 50 MHz)
-    reg        sistema_on_prev;
+    reg [5:0]  passo = 6'd0;
+    reg [21:0] cnt_tempo = 22'd0; // Conta até 100.000 ciclos (2 ms em 50 MHz)
+    reg        sistema_on_prev = 1'b0;
 
     // Conversão de complemento de 2 (16 bits) para sinal + magnitude decimal (5 dígitos)
     wire        negativo = valor_16b[15];
@@ -111,7 +112,7 @@ module lcd (
 
         // Detecta borda de ligar/desligar o sistema
         if (sistema_on && !sistema_on_prev) begin
-            estado    <= ST_INIT;
+            estado    <= ST_PWR_WAIT;
             passo     <= 6'd0;
             cnt_tempo <= 17'd0;
         end else if (!sistema_on && sistema_on_prev) begin
@@ -122,37 +123,44 @@ module lcd (
             case (estado)
                 ST_OFF: begin
                     // Envia comando 0x08 (Display OFF) uma vez e mantém EN em 0
-                    if (passo == 6'd0) begin
-                        lcd_rs   <= 1'b0;
-                        lcd_data <= 8'h08;
-                        if (cnt_tempo == 17'd0)          lcd_en <= 1'b1;
-                        else if (cnt_tempo == 17'd25000) lcd_en <= 1'b0; // negedge
-
-                        if (cnt_tempo >= 17'd99999) begin
-                            cnt_tempo <= 17'd0;
-                            passo     <= 6'd1;
-                        end else begin
-                            cnt_tempo <= cnt_tempo + 17'd1;
-                        end
-                    end
+                    lcd_rs    <= 1'b0;
+                    lcd_data  <= 8'h00;
+                    lcd_en    <= 1'b0;
+                    passo     <= 6'd0;
+                    cnt_tempo <= 17'd0;
                 end
 
+					 ST_PWR_WAIT: begin
+                    lcd_rs   <= 1'b0;
+                    lcd_data <= 8'h00;
+                    lcd_en   <= 1'b0;
+                    if (cnt_tempo >= 22'd2_499_999) begin
+                        cnt_tempo <= 22'd0;
+                        passo     <= 6'd0;
+                        estado    <= ST_INIT;
+                    end else begin
+                        cnt_tempo <= cnt_tempo + 22'd1;
+                    end
+                end
+					 
                 ST_INIT: begin
                     // Sequência obrigatória de inicialização do HD44780
                     lcd_rs <= 1'b0;
                     case (passo)
                         6'd0: lcd_data <= 8'h38; // Modo 8 bits, 2 linhas, 5x8
-                        6'd1: lcd_data <= 8'h0C; // Display ON, sem cursor
-                        6'd2: lcd_data <= 8'h06; // Incrementa cursor à direita
-                        6'd3: lcd_data <= 8'h01; // Limpa display
+                        6'd1: lcd_data <= 8'h38; // Display ON, sem cursor
+                        6'd2: lcd_data <= 8'h38; // Incrementa cursor à direita
+                        6'd3: lcd_data <= 8'h0C;
+								6'd4: lcd_data <= 8'h06;
+								6'd5: lcd_data <= 8'h01;	// Limpa display
                     endcase
 
                     if (cnt_tempo == 17'd0)          lcd_en <= 1'b1;
                     else if (cnt_tempo == 17'd25000) lcd_en <= 1'b0; // negedge
 
-                    if (cnt_tempo >= 17'd99999) begin
-                        cnt_tempo <= 17'd0;
-                        if (passo == 6'd3) begin
+                    if (cnt_tempo >= 22'd249_999) begin
+                        cnt_tempo <= 22'd0;
+                        if (passo == 6'd5) begin
                             passo  <= 6'd0;
                             estado <= ST_WRITE_ALL; // Já desenha a tela inicial
                         end else begin

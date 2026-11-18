@@ -6,7 +6,8 @@ input wire [17:0] data,
 output wire [7:0] lcd_data,
 output wire lcd_rs,
 output wire lcd_rw,
-output wire lcd_en
+output wire lcd_en,
+output wire lcd_on
 );
 wire [15:0] alu_result;
 wire [15:0] mem_q;
@@ -89,9 +90,13 @@ localparam WAIT_BUTTON = 3'd0,
            LCD_UPDATE  = 3'd5;
 
 reg [2:0]  estado_atual = WAIT_BUTTON;
-reg        enviar_prev;
-reg        on_off_prev;
+reg [19:0] deb_on_cnt   = 20'd0;
+reg        on_off_sync  = 1'b1;
+reg        on_off_prev  = 1'b1;
 
+reg [19:0] deb_env_cnt  = 20'd0;
+reg        enviar_sync  = 1'b1;
+reg        enviar_prev  = 1'b1;
 // Sinais de controle do LCD
 reg        sistema_on   = 1'b0;
 reg        tela_inicial = 1'b1;
@@ -99,9 +104,14 @@ reg        lcd_atualizar;
 reg [2:0]  lcd_opcode_reg;
 reg [3:0]  lcd_dest_reg;
 reg [15:0] lcd_valor_reg;
+assign 	  lcd_on = sistema_on;
 
-wire on_off_solto = (on_off_prev == 1'b0 && on_off == 1'b1);
-wire enviar_solto = (enviar_prev == 1'b0 && enviar == 1'b1);
+// contador para estabilização inical
+reg [19:0] boot_cnt = 20'd0;
+wire       pronto   = (boot_cnt == 20'd500_000);
+
+wire on_off_solto = (on_off_prev == 1'b0 && on_off_sync == 1'b1);
+wire enviar_solto = (enviar_prev == 1'b0 && enviar_sync == 1'b1);
 
 // Instância do controlador do LCD usando os valores salvos
 lcd lcd_inst (
@@ -129,12 +139,50 @@ end
 
 // Único bloco sequencial da CPU
 always @(posedge clk) begin
-    enviar_prev   <= enviar;
-    on_off_prev   <= on_off;
-    lcd_atualizar <= 1'b0;
-    mem_clear     <= 1'b0;
+    if (!pronto) begin
+        boot_cnt      <= boot_cnt + 20'd1;
+        on_off_sync   <= on_off;
+        on_off_prev   <= on_off;
+        enviar_sync   <= enviar;
+        enviar_prev   <= enviar;
+        deb_on_cnt    <= 20'd0;
+        deb_env_cnt   <= 20'd0;
+        sistema_on    <= 1'b0;
+        lcd_atualizar <= 1'b0;
+        mem_clear     <= 1'b1;
+        mem_we        <= 1'b0;
+        estado_atual  <= WAIT_BUTTON;
+    end else begin
+        // [MODIFICADO] Filtro de debounce de 15 ms (750.000 ciclos) para on_off
+        if (on_off != on_off_sync) begin
+            if (deb_on_cnt >= 20'd750_000) begin
+                on_off_sync <= on_off;
+                deb_on_cnt  <= 20'd0;
+            end else begin
+                deb_on_cnt <= deb_on_cnt + 20'd1;
+            end
+        end else begin
+            deb_on_cnt <= 20'd0;
+        end
 
-    if (on_off_solto) begin
+        // [MODIFICADO] Filtro de debounce de 15 ms (750.000 ciclos) para enviar
+        if (enviar != enviar_sync) begin
+            if (deb_env_cnt >= 20'd750_000) begin
+                enviar_sync <= enviar;
+                deb_env_cnt <= 20'd0;
+            end else begin
+                deb_env_cnt <= deb_env_cnt + 20'd1;
+            end
+        end else begin
+            deb_env_cnt <= 20'd0;
+        end
+
+        on_off_prev   <= on_off_sync;
+        enviar_prev   <= enviar_sync;
+        lcd_atualizar <= 1'b0;
+        mem_clear     <= 1'b0;
+		  
+		 if (on_off_solto) begin
         sistema_on   <= ~sistema_on;
         tela_inicial <= 1'b1;
         mem_clear    <= 1'b1; // Zera toda a memória ao ligar/desligar
@@ -189,6 +237,7 @@ always @(posedge clk) begin
 
             default: estado_atual <= WAIT_BUTTON;
         endcase
-    end
+		end
+	 end
 end
 endmodule

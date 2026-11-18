@@ -42,7 +42,7 @@ module module_alu (
             end
             
             S_SUB: begin
-                resultado <= valor1;
+                resultado <= valor1 - valor2;
             end
             
             S_SUBI: begin
