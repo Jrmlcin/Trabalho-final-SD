@@ -1,11 +1,11 @@
 module lcd (
-    input  wire        clk,          // Clock de 50 MHz da DE2-115
+    input  wire        clk,          
     input  wire        sistema_on,   // 1 = CPU ligada, 0 = CPU desligada
     input  wire        atualizar,    // Pulso de 1 ciclo quando uma instrução termina
     input  wire        tela_inicial, // 1 = exibe "------ [----] / +00000"
-    input  wire [2:0]  opcode,       // Opcode da instrução executada
-    input  wire [3:0]  reg_dest,     // Endereço do registrador mostrado entre [ ]
-    input  wire [15:0] valor_16b,    // Resultado da ULA (ou valor lido no DISPLAY)
+    input  wire [2:0]  opcode,       
+    input  wire [3:0]  reg_dest,     
+    input  wire [15:0] valor_16b,    // valor mostrado no display
     output reg  [7:0]  lcd_data,
     output reg         lcd_rs,
     output reg         lcd_rw,
@@ -22,21 +22,23 @@ module lcd (
                OP_CLEAR   = 3'b110,
                OP_DISPLAY = 3'b111;
 
-    // Estados da máquina de envio ao LCD
+    // Estados de envio ao LCD
     localparam ST_IDLE      = 3'd0,
                ST_INIT      = 3'd1,
                ST_WRITE_ALL = 3'd2,
-               ST_OFF       = 3'd3;
+               ST_OFF       = 3'd3,
+					ST_PWR_WAIT	 = 3'd4;
 
     reg [2:0]  estado = ST_OFF;
-    reg [5:0]  passo;
-    reg [16:0] cnt_tempo; // Conta até 100.000 ciclos (2 ms em 50 MHz)
-    reg        sistema_on_prev;
+    reg [5:0]  passo = 6'd0;
+    reg [21:0] cnt_tempo = 22'd0; // Conta até 100.000 
+    reg        sistema_on_prev = 1'b0;
 
-    // Conversão de complemento de 2 (16 bits) para sinal + magnitude decimal (5 dígitos)
+    // Conversão de complemento de 2 para sinal  
     wire        negativo = valor_16b[15];
     wire [15:0] abs_val  = negativo ? (~valor_16b + 16'd1) : valor_16b;
 
+    // Isolar separadamente cada casa decimal
     wire [3:0] d4 = (abs_val / 16'd10000) % 10;
     wire [3:0] d3 = (abs_val / 16'd1000)  % 10;
     wire [3:0] d2 = (abs_val / 16'd100)   % 10;
@@ -59,7 +61,7 @@ module lcd (
         endcase
     end
 
-    // Seleciona o caractere ASCII (0 a 31) correspondente à posição atual da tela
+    // Seleciona o caractere correspondente à posição atual da tela
     reg [7:0] char_atual;
     always @(*) begin
         if (tela_inicial) begin
@@ -83,7 +85,7 @@ module lcd (
                 6'd4: char_atual = op_texto[15:8];
                 6'd5: char_atual = op_texto[7:0];
 
-                // Linha 1: Registrador [XXXX] (colunas 10 a 15) - oculto no CLEAR
+                // Linha 1: Registrador [XXXX] (colunas 10 a 15)
                 6'd11: char_atual = (opcode == OP_CLEAR) ? " " : "[";
                 6'd12: char_atual = (opcode == OP_CLEAR) ? " " : (reg_dest[3] ? "1" : "0");
                 6'd13: char_atual = (opcode == OP_CLEAR) ? " " : (reg_dest[2] ? "1" : "0");
@@ -91,9 +93,9 @@ module lcd (
                 6'd15: char_atual = (opcode == OP_CLEAR) ? " " : (reg_dest[0] ? "1" : "0");
                 6'd16: char_atual = (opcode == OP_CLEAR) ? " " : "]";
 
-                // Linha 2: Sinal + 5 dígitos (colunas 10 a 15) - oculto no CLEAR
+                // Linha 2: Sinal + 5 dígitos (colunas 10 a 15)
                 6'd28: char_atual = (opcode == OP_CLEAR) ? " " : (negativo ? "-" : "+");
-                6'd29: char_atual = (opcode == OP_CLEAR) ? " " : (8'h30 + {4'd0, d4});
+                6'd29: char_atual = (opcode == OP_CLEAR) ? " " : (8'h30 + {4'd0, d4}); // na tablea ASCII, o valor de 8'h30 + o numero equivalem aos digistos 0 a 9
                 6'd30: char_atual = (opcode == OP_CLEAR) ? " " : (8'h30 + {4'd0, d3});
                 6'd31: char_atual = (opcode == OP_CLEAR) ? " " : (8'h30 + {4'd0, d2});
                 6'd32: char_atual = (opcode == OP_CLEAR) ? " " : (8'h30 + {4'd0, d1});
@@ -104,14 +106,14 @@ module lcd (
         end
     end
 
-    // Máquina de estados com geração de pulso ENABLE (negedge em 0,5 ms; espera até 2 ms)
+    // Máquina de estados com geração de pulso ENABLE
     always @(posedge clk) begin
         sistema_on_prev <= sistema_on;
         lcd_rw <= 1'b0; // Sempre em modo escrita
 
-        // Detecta borda de ligar/desligar o sistema
+        // Detecta a transição de ligar/desligar o sistema
         if (sistema_on && !sistema_on_prev) begin
-            estado    <= ST_INIT;
+            estado    <= ST_PWR_WAIT;
             passo     <= 6'd0;
             cnt_tempo <= 17'd0;
         end else if (!sistema_on && sistema_on_prev) begin
@@ -121,40 +123,47 @@ module lcd (
         end else begin
             case (estado)
                 ST_OFF: begin
-                    // Envia comando 0x08 (Display OFF) uma vez e mantém EN em 0
-                    if (passo == 6'd0) begin
-                        lcd_rs   <= 1'b0;
-                        lcd_data <= 8'h08;
-                        if (cnt_tempo == 17'd0)          lcd_en <= 1'b1;
-                        else if (cnt_tempo == 17'd25000) lcd_en <= 1'b0; // negedge
-
-                        if (cnt_tempo >= 17'd99999) begin
-                            cnt_tempo <= 17'd0;
-                            passo     <= 6'd1;
-                        end else begin
-                            cnt_tempo <= cnt_tempo + 17'd1;
-                        end
-                    end
+                    // Envia comando de Display OFF uma vez e mantém EN em 0
+                    lcd_rs    <= 1'b0;
+                    lcd_data  <= 8'h00;
+                    lcd_en    <= 1'b0;
+                    passo     <= 6'd0;
+                    cnt_tempo <= 17'd0;
                 end
 
+				ST_PWR_WAIT: begin
+                    lcd_rs   <= 1'b0;
+                    lcd_data <= 8'h00;
+                    lcd_en   <= 1'b0;
+                    if (cnt_tempo >= 22'd2_499_999) begin //50ms de espera
+                        cnt_tempo <= 22'd0;
+                        passo     <= 6'd0;
+                        estado    <= ST_INIT;
+                    end else begin
+                        cnt_tempo <= cnt_tempo + 22'd1;
+                    end
+                end
+					 
                 ST_INIT: begin
                     // Sequência obrigatória de inicialização do HD44780
                     lcd_rs <= 1'b0;
                     case (passo)
-                        6'd0: lcd_data <= 8'h38; // Modo 8 bits, 2 linhas, 5x8
-                        6'd1: lcd_data <= 8'h0C; // Display ON, sem cursor
-                        6'd2: lcd_data <= 8'h06; // Incrementa cursor à direita
-                        6'd3: lcd_data <= 8'h01; // Limpa display
+                        6'd0: lcd_data <= 8'h38; 
+                        6'd1: lcd_data <= 8'h38; 
+                        6'd2: lcd_data <= 8'h38; 
+                        6'd3: lcd_data <= 8'h0C;
+						6'd4: lcd_data <= 8'h06;
+						6'd5: lcd_data <= 8'h01;
                     endcase
 
                     if (cnt_tempo == 17'd0)          lcd_en <= 1'b1;
-                    else if (cnt_tempo == 17'd25000) lcd_en <= 1'b0; // negedge
+                    else if (cnt_tempo == 17'd25000) lcd_en <= 1'b0;
 
-                    if (cnt_tempo >= 17'd99999) begin
-                        cnt_tempo <= 17'd0;
-                        if (passo == 6'd3) begin
+                    if (cnt_tempo >= 22'd249_999) begin
+                        cnt_tempo <= 22'd0;
+                        if (passo == 6'd5) begin
                             passo  <= 6'd0;
-                            estado <= ST_WRITE_ALL; // Já desenha a tela inicial
+                            estado <= ST_WRITE_ALL; // Desenha a tela inicial
                         end else begin
                             passo <= passo + 6'd1;
                         end
@@ -164,10 +173,10 @@ module lcd (
                 end
 
                 ST_WRITE_ALL: begin
-                    // Passo 0: posiciona na Linha 1 (0x80)
-                    // Passos 1..16: escreve 16 chars da Linha 1
-                    // Passo 17: posiciona na Linha 2 (0xC0)
-                    // Passos 18..33: escreve 16 chars da Linha 2
+                    // Passo 0: posiciona na Linha 1 
+                    // Passos 1..16: escreve na Linha 1
+                    // Passo 17: posiciona na Linha 2
+                    // Passos 18..33: escreve na Linha 2
                     if (passo == 6'd0) begin
                         lcd_rs   <= 1'b0;
                         lcd_data <= 8'h80;
@@ -180,7 +189,7 @@ module lcd (
                     end
 
                     if (cnt_tempo == 17'd0)          lcd_en <= 1'b1;
-                    else if (cnt_tempo == 17'd25000) lcd_en <= 1'b0; // negedge
+                    else if (cnt_tempo == 17'd25000) lcd_en <= 1'b0; 
 
                     if (cnt_tempo >= 17'd99999) begin
                         cnt_tempo <= 17'd0;

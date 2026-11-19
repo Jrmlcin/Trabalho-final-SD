@@ -22,7 +22,8 @@ module module_alu (
                           S_SUB  = 3'd3,
                           S_SUBI = 3'd4,
                           S_MUL  = 3'd5,
-                          S_CLR  = 3'd6;
+                          S_CLR  = 3'd6,
+								  S_DPL  = 3'd7;
                            
     
     always @(posedge clk) begin
@@ -41,7 +42,7 @@ module module_alu (
             end
             
             S_SUB: begin
-                resultado <= valor1;
+                resultado <= valor1 - valor2;
             end
             
             S_SUBI: begin
@@ -65,6 +66,10 @@ module module_alu (
 				
 				S_CLR: begin
 					resultado <= 16'd0;
+				end
+				
+				S_DPL: begin
+				 resultado <= valor1;
 				end
 				
 				default: begin
